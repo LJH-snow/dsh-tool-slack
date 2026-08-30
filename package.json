@@ -1,7 +1,7 @@
 {
   "name": "@libai168/dsh-tool-slack",
-  "description": "Slack tools for DeepSeek Harness: conversations, messages, users, reactions, and notifications",
-  "version": "0.1.0",
+  "description": "Slack tools for DeepSeek Harness: conversations, members, rich messages, scheduled messages, users, reactions, and notifications",
+  "version": "0.2.0",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",

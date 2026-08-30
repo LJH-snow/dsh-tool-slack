@@ -2,9 +2,9 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-A Cordis tool plugin that gives [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) focused Slack workflows: workspace auth checks, channel discovery, message history, thread replies, message search, user profiles, and common notification actions.
+A Cordis tool plugin that gives [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) focused Slack workflows: workspace auth checks, channel discovery, channel members, message history, thread replies, message search, user profiles, rich messages, scheduled messages, and common notification actions.
 
-The plugin registers 12 tools with the official `ctx.tools.register(defineTool(...))` contract, uses `presentCall`/`presentResult` for compact replay-friendly UI cards, and treats authentication, request timeout, and cancellation as first-class concerns.
+The plugin registers 15 tools with the official `ctx.tools.register(defineTool(...))` contract, uses `presentCall`/`presentResult` for compact replay-friendly UI cards, and treats authentication, request timeout, and cancellation as first-class concerns.
 
 ## Install
 
@@ -52,6 +52,7 @@ Full example: [examples/cordis.yml](examples/cordis.yml).
 | `slack_list_channels` | List public/private conversations with pagination | config or arg |
 | `slack_get_channel` | Get channel metadata, member count, topic, and purpose | config or arg |
 | `slack_list_channel_messages` | List recent channel messages, optionally by time range | config or arg |
+| `slack_list_channel_members` | List user ids that are members of a channel | config or arg |
 | `slack_list_thread_replies` | List replies in a thread by parent message ts | config or arg |
 | `slack_search_messages` | Search messages by free text with channel and permalink | n/a |
 | `slack_list_users` | List workspace users with profile and role metadata | n/a |
@@ -61,8 +62,10 @@ Full example: [examples/cordis.yml](examples/cordis.yml).
 
 | Tool | Description | Channel |
 |---|---|---|
-| `slack_post_message` | Post a message or thread reply | config or arg |
-| `slack_update_message` | Update an existing message | config or arg |
+| `slack_post_message` | Post a message or thread reply, optionally with Block Kit/attachments | config or arg |
+| `slack_update_message` | Update an existing message, optionally with Block Kit/attachments | config or arg |
+| `slack_schedule_message` | Schedule a message for later delivery | config or arg |
+| `slack_delete_scheduled_message` | Delete a message that has not been sent yet | config or arg |
 | `slack_delete_message` | Delete an existing message | config or arg |
 | `slack_add_reaction` | Add a reaction emoji to a message | config or arg |
 

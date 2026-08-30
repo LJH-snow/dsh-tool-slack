@@ -194,6 +194,22 @@ describe('SlackClient', () => {
     expect(url).toContain('/users.info?user=U1')
   })
 
+  it('listChannelMembers sends conversation filters and maps raw member ids', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      members: ['U1', 'U2'],
+      response_metadata: { next_cursor: 'member-cursor-2' },
+    }))
+    const client = new SlackClient({ token: 't', fetchImpl })
+    const result = await client.listChannelMembers('C1', { limit: 5 })
+
+    expect(result).toMatchObject({ items: ['U1', 'U2'], nextCursor: 'member-cursor-2', hasMore: true })
+    const [url] = fetchImpl.mock.calls[0] as [string]
+    expect(url).toContain('/conversations.members?')
+    expect(url).toContain('channel=C1')
+    expect(url).toContain('limit=5')
+  })
+
   it('searchMessages sends the query and maps matches', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(200, {
       ok: true,
@@ -244,6 +260,102 @@ describe('SlackClient', () => {
       text: 'hello',
       thread_ts: '1700000000.100000',
       mrkdwn: true,
+    })
+  })
+
+  it('postMessage and updateMessage send Block Kit, attachments, and sender overrides', async () => {
+    const postFetch = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      channel: 'C1',
+      ts: '1700000001.100000',
+      message: { text: null, user: 'U1' },
+    }))
+    const postClient = new SlackClient({ token: 't', fetchImpl: postFetch })
+    await postClient.postMessage({
+      channel: 'C1',
+      blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'Release ready' } }],
+      attachments: [{ color: '#36a64f', text: 'Deploy finished' }],
+      parse: 'full',
+      username: 'Release Bot',
+      iconEmoji: ':rocket:',
+      iconUrl: 'https://example.com/icon.png',
+      asUser: true,
+    })
+    expect(JSON.parse(String((postFetch.mock.calls[0] as [string, RequestInit])[1].body))).toEqual({
+      channel: 'C1',
+      blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'Release ready' } }],
+      attachments: [{ color: '#36a64f', text: 'Deploy finished' }],
+      parse: 'full',
+      username: 'Release Bot',
+      icon_emoji: ':rocket:',
+      icon_url: 'https://example.com/icon.png',
+      as_user: true,
+    })
+
+    const updateFetch = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      channel: 'C1',
+      ts: '1700000001.100000',
+      message: { text: null, user: 'U1' },
+    }))
+    const updateClient = new SlackClient({ token: 't', fetchImpl: updateFetch })
+    await updateClient.updateMessage({
+      channel: 'C1',
+      ts: '1700000001.100000',
+      blocks: [{ type: 'section', text: { type: 'plain_text', text: 'Updated' } }],
+      attachments: [{ color: '#ff0000', text: 'Rollback' }],
+      parse: 'none',
+    })
+    expect(JSON.parse(String((updateFetch.mock.calls[0] as [string, RequestInit])[1].body))).toEqual({
+      channel: 'C1',
+      ts: '1700000001.100000',
+      blocks: [{ type: 'section', text: { type: 'plain_text', text: 'Updated' } }],
+      attachments: [{ color: '#ff0000', text: 'Rollback' }],
+      parse: 'none',
+    })
+  })
+
+  it('scheduleMessage and deleteScheduledMessage send write bodies and map results', async () => {
+    const scheduleFetch = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      channel: 'C1',
+      scheduled_message_id: 'Q123',
+      post_at: '1770000000',
+      text: 'hello later',
+      user: 'U1',
+    }))
+    const scheduleClient = new SlackClient({ token: 't', fetchImpl: scheduleFetch })
+    const scheduled = await scheduleClient.scheduleMessage({
+      channel: 'C1',
+      text: 'hello later',
+      blocks: [{ type: 'section', text: { type: 'plain_text', text: 'Later' } }],
+      postAt: 1770000000,
+      asUser: true,
+    })
+    expect(scheduled).toEqual({
+      ok: true,
+      channel: 'C1',
+      scheduledMessageId: 'Q123',
+      postAt: '1770000000',
+      text: 'hello later',
+      user: 'U1',
+    })
+    expect(JSON.parse(String((scheduleFetch.mock.calls[0] as [string, RequestInit])[1].body))).toEqual({
+      channel: 'C1',
+      post_at: '1770000000',
+      text: 'hello later',
+      blocks: [{ type: 'section', text: { type: 'plain_text', text: 'Later' } }],
+      as_user: true,
+    })
+
+    const deleteFetch = vi.fn(async () => jsonResponse(200, { ok: true, channel: 'C1', scheduled_message_id: 'Q123' }))
+    const deleteClient = new SlackClient({ token: 't', fetchImpl: deleteFetch })
+    expect(await deleteClient.deleteScheduledMessage({ channel: 'C1', scheduledMessageId: 'Q123', asUser: true }))
+      .toEqual({ ok: true, channel: 'C1', scheduledMessageId: 'Q123' })
+    expect(JSON.parse(String((deleteFetch.mock.calls[0] as [string, RequestInit])[1].body))).toEqual({
+      channel: 'C1',
+      scheduled_message_id: 'Q123',
+      as_user: true,
     })
   })
 

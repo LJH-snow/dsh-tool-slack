@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolCallView, ToolResultView } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { SlackClient, SlackError } from './client.js'
+import { SlackAttachment, SlackBlock, SlackClient, SlackError } from './client.js'
 
 export const name = 'dsh-tool-slack'
 export const inject = ['tools']
@@ -504,6 +504,62 @@ export function createTools(client: SlackClient) {
     }),
 
     defineTool({
+      name: 'slack_list_channel_members',
+      description: 'List the user ids that are members of a Slack channel, with pagination.',
+      parameters: {
+        channel: { type: 'string', description: 'Channel id or name; defaults to plugin config when omitted' },
+        limit: { type: 'integer', description: 'Maximum results, 1-200 (default 20)' },
+        cursor: { type: 'string', description: 'Opaque cursor from a previous response nextCursor' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            found: { type: 'boolean', description: 'Whether channel members are accessible' },
+            reason: { type: 'string', description: 'Explanation when not accessible' },
+            items: { type: 'array', items: { type: 'string' }, description: 'Slack user ids that are channel members' },
+            nextCursor: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Cursor for the next page' },
+            hasMore: { type: 'boolean', description: 'Whether more members are available' },
+          },
+        },
+        render: (_args, value) => {
+          if (!value.found) return [{ type: 'text', text: 'Channel members are not accessible.' }]
+          const items = value.items ?? []
+          if (items.length === 0) return [{ type: 'text', text: 'No channel members found.' }]
+          return [{ type: 'text', text: items.join('\n') }]
+        },
+      },
+      presentCall(args): ToolCallView {
+        return { card: 'generic', title: `Members of ${resolveChannelLabel(client, args)}`, kind: 'search' }
+      },
+      presentResult(_args, result): ToolResultView | undefined {
+        const v = result as unknown as { found?: boolean; items?: unknown[] }
+        if (!v.found) return { card: 'generic', title: 'Channel members not accessible' }
+        return { card: 'generic', title: `${(v.items ?? []).length} member(s)` }
+      },
+      async execute(args, exec) {
+        if (!client.hasToken()) return { found: false, items: [], reason: 'Listing Slack channel members requires a bot token.' }
+        const channel = resolveChannel(client, args)
+        if (!channel) return { found: false, items: [], reason: 'Slack channel is required. Set plugin config or pass channel.' }
+        try {
+          const limit = args.limit === undefined ? 20 : Math.max(1, Math.min(Number(args.limit), 200))
+          const result = await client.listChannelMembers(channel, {
+            limit,
+            cursor: args.cursor,
+            signal: exec.signal,
+          })
+          return { found: true, ...result }
+        } catch (error) {
+          if (error instanceof SlackError && error.code === 'channel_not_found') {
+            return { found: false, items: [], reason: 'Channel not found.' }
+          }
+          throw error
+        }
+      },
+    }),
+
+    defineTool({
       name: 'slack_get_user',
       description: 'Get one Slack user profile: name, email, title, timezone, roles, and current status.',
       parameters: {
@@ -574,13 +630,19 @@ export function createTools(client: SlackClient) {
       description: 'Post a message to a Slack channel or thread. WRITE operation: requires channel write access.',
       parameters: {
         channel: { type: 'string', description: 'Channel id or name; defaults to plugin config when omitted' },
-        text: { type: 'string', required: true, description: 'Message text' },
+        text: { type: 'string', description: 'Message text; optional when blocks or attachments provide content' },
+        blocks: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Block Kit blocks for a rich message' },
+        attachments: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Legacy message attachments' },
         threadTs: { type: 'string', description: 'Parent message ts to reply in an existing thread' },
         replyBroadcast: { type: 'boolean', description: 'Also broadcast a thread reply to the channel' },
         mrkdwn: { type: 'boolean', description: 'Enable Slack markdown in the message' },
         linkNames: { type: 'boolean', description: 'Linkify channel and usernames' },
         unfurlLinks: { type: 'boolean', description: 'Unfurl links' },
         unfurlMedia: { type: 'boolean', description: 'Unfurl media' },
+        parse: { type: 'string', enum: ['none', 'full'], description: 'How to parse the message text' },
+        username: { type: 'string', description: 'Display name shown as the message sender' },
+        iconEmoji: { type: 'string', description: 'Emoji used as the sender icon, e.g. :rocket:' },
+        iconUrl: { type: 'string', description: 'Image URL used as the sender icon' },
         asUser: { type: 'boolean', description: 'Post as the authenticated user instead of the bot' },
       },
       output: {
@@ -616,13 +678,19 @@ export function createTools(client: SlackClient) {
         try {
           return await client.postMessage({
             channel,
-            text: args.text as string,
+            text: args.text,
+            blocks: args.blocks as SlackBlock[] | undefined,
+            attachments: args.attachments as SlackAttachment[] | undefined,
             threadTs: args.threadTs,
             replyBroadcast: args.replyBroadcast,
             mrkdwn: args.mrkdwn,
             linkNames: args.linkNames,
             unfurlLinks: args.unfurlLinks,
             unfurlMedia: args.unfurlMedia,
+            parse: args.parse,
+            username: args.username,
+            iconEmoji: args.iconEmoji,
+            iconUrl: args.iconUrl,
             asUser: args.asUser,
             signal: exec.signal,
           })
@@ -642,6 +710,8 @@ export function createTools(client: SlackClient) {
         channel: { type: 'string', description: 'Channel id or name; defaults to plugin config when omitted' },
         ts: { type: 'string', required: true, description: 'Message timestamp, e.g. 1234567890.123456' },
         text: { type: 'string', description: 'Replacement message text' },
+        blocks: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Block Kit blocks for a rich message' },
+        attachments: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Legacy message attachments' },
         mrkdwn: { type: 'boolean', description: 'Enable Slack markdown in the message' },
         linkNames: { type: 'boolean', description: 'Linkify channel and usernames' },
         parse: { type: 'string', enum: ['none', 'full'], description: 'How to parse the message text' },
@@ -682,6 +752,8 @@ export function createTools(client: SlackClient) {
             channel,
             ts: args.ts as string,
             text: args.text,
+            blocks: args.blocks as SlackBlock[] | undefined,
+            attachments: args.attachments as SlackAttachment[] | undefined,
             mrkdwn: args.mrkdwn,
             linkNames: args.linkNames,
             parse: args.parse,
@@ -691,6 +763,132 @@ export function createTools(client: SlackClient) {
         } catch (error) {
           if (error instanceof SlackError && isWriteFailure(error)) {
             return { ok: false, channel, ts: args.ts as string, text: null, user: null, reason: `Slack rejected the update: ${error.code}` }
+          }
+          throw error
+        }
+      },
+    }),
+
+    defineTool({
+      name: 'slack_schedule_message',
+      description: 'Schedule a message to be sent later in a Slack channel. WRITE operation: requires channel write access.',
+      parameters: {
+        channel: { type: 'string', description: 'Channel id or name; defaults to plugin config when omitted' },
+        text: { type: 'string', description: 'Message text; optional when blocks or attachments provide content' },
+        blocks: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Block Kit blocks for a rich message' },
+        attachments: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Legacy message attachments' },
+        postAt: { type: 'string', required: true, description: 'Unix timestamp when the message should be sent, e.g. 1770000000' },
+        threadTs: { type: 'string', description: 'Parent message ts to schedule a reply in an existing thread' },
+        replyBroadcast: { type: 'boolean', description: 'Also broadcast a scheduled thread reply to the channel' },
+        linkNames: { type: 'boolean', description: 'Linkify channel and usernames' },
+        parse: { type: 'string', enum: ['none', 'full'], description: 'How to parse the message text' },
+        unfurlLinks: { type: 'boolean', description: 'Unfurl links' },
+        unfurlMedia: { type: 'boolean', description: 'Unfurl media' },
+        asUser: { type: 'boolean', description: 'Schedule as the authenticated user instead of the bot' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ok: { type: 'boolean', description: 'Whether the message was scheduled' },
+            channel: { type: 'string', description: 'Channel id that will receive the message' },
+            scheduledMessageId: { type: 'string', description: 'Scheduled message id' },
+            postAt: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Unix timestamp when Slack will send the message' },
+            text: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Scheduled message text' },
+            user: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Message author id' },
+            reason: { type: 'string', description: 'Explanation when not scheduled' },
+          },
+        },
+        render: (_args, value) => {
+          if (!value.ok) return [{ type: 'text', text: `Could not schedule Slack message: ${value.reason}` }]
+          return [{ type: 'text', text: `Scheduled ${value.channel} at ${value.postAt}\n${value.text ?? ''}` }]
+        },
+      },
+      presentCall(args): ToolCallView {
+        return { card: 'generic', title: `Schedule to ${resolveChannelLabel(client, args)} at ${args.postAt}`, kind: 'edit' }
+      },
+      presentResult(_args, result): ToolResultView | undefined {
+        const v = result as unknown as { ok?: boolean; scheduledMessageId?: string; channel?: string }
+        if (!v.ok) return { card: 'generic', title: 'Schedule failed' }
+        return { card: 'generic', title: `Scheduled ${v.scheduledMessageId ?? ''}`, content: [{ type: 'text', text: v.channel ?? '' }] }
+      },
+      async execute(args, exec) {
+        if (!client.hasToken()) return { ok: false, channel: '', scheduledMessageId: '', postAt: null, text: null, user: null, reason: 'Scheduling a Slack message requires a bot token.' }
+        const channel = resolveChannel(client, args)
+        if (!channel) return { ok: false, channel: '', scheduledMessageId: '', postAt: null, text: null, user: null, reason: 'Slack channel is required. Set plugin config or pass channel.' }
+        try {
+          return await client.scheduleMessage({
+            channel,
+            text: args.text,
+            blocks: args.blocks as SlackBlock[] | undefined,
+            attachments: args.attachments as SlackAttachment[] | undefined,
+            postAt: args.postAt as string,
+            threadTs: args.threadTs,
+            replyBroadcast: args.replyBroadcast,
+            linkNames: args.linkNames,
+            parse: args.parse,
+            unfurlLinks: args.unfurlLinks,
+            unfurlMedia: args.unfurlMedia,
+            asUser: args.asUser,
+            signal: exec.signal,
+          })
+        } catch (error) {
+          if (error instanceof SlackError && isWriteFailure(error)) {
+            return { ok: false, channel, scheduledMessageId: '', postAt: null, text: null, user: null, reason: `Slack rejected the scheduled message: ${error.code}` }
+          }
+          throw error
+        }
+      },
+    }),
+
+    defineTool({
+      name: 'slack_delete_scheduled_message',
+      description: 'Delete a Slack message that has not been sent yet. WRITE operation: requires channel write access.',
+      parameters: {
+        channel: { type: 'string', description: 'Channel id or name; defaults to plugin config when omitted' },
+        scheduledMessageId: { type: 'string', required: true, description: 'Scheduled message id' },
+        asUser: { type: 'boolean', description: 'Delete as the authenticated user instead of the bot' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ok: { type: 'boolean', description: 'Whether the scheduled message was deleted' },
+            channel: { type: 'string', description: 'Channel id that contained the scheduled message' },
+            scheduledMessageId: { type: 'string', description: 'Deleted scheduled message id' },
+            reason: { type: 'string', description: 'Explanation when not deleted' },
+          },
+        },
+        render: (_args, value) => {
+          if (!value.ok) return [{ type: 'text', text: `Could not delete scheduled Slack message: ${value.reason}` }]
+          return [{ type: 'text', text: `Deleted scheduled message ${value.scheduledMessageId} from ${value.channel}` }]
+        },
+      },
+      presentCall(args): ToolCallView {
+        return { card: 'generic', title: `Delete scheduled message ${args.scheduledMessageId}`, kind: 'edit' }
+      },
+      presentResult(_args, result): ToolResultView | undefined {
+        const v = result as unknown as { ok?: boolean; scheduledMessageId?: string }
+        if (!v.ok) return { card: 'generic', title: 'Delete scheduled message failed' }
+        return { card: 'generic', title: `Scheduled message ${v.scheduledMessageId ?? ''} deleted` }
+      },
+      async execute(args, exec) {
+        if (!client.hasToken()) return { ok: false, channel: '', scheduledMessageId: args.scheduledMessageId as string, reason: 'Deleting a scheduled Slack message requires a bot token.' }
+        const channel = resolveChannel(client, args)
+        if (!channel) return { ok: false, channel: '', scheduledMessageId: args.scheduledMessageId as string, reason: 'Slack channel is required. Set plugin config or pass channel.' }
+        try {
+          const result = await client.deleteScheduledMessage({
+            channel,
+            scheduledMessageId: args.scheduledMessageId as string,
+            asUser: args.asUser,
+            signal: exec.signal,
+          })
+          return { ok: true, channel, scheduledMessageId: result.scheduledMessageId }
+        } catch (error) {
+          if (error instanceof SlackError && isWriteFailure(error)) {
+            return { ok: false, channel, scheduledMessageId: args.scheduledMessageId as string, reason: `Slack rejected the scheduled message delete: ${error.code}` }
           }
           throw error
         }

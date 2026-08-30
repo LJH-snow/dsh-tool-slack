@@ -103,10 +103,27 @@ export interface MessageWriteResult {
   reason?: string
 }
 
+export interface ScheduledMessageResult {
+  ok: boolean
+  channel: string
+  scheduledMessageId: string
+  postAt: string | null
+  text: string | null
+  user: string | null
+  reason?: string
+}
+
 export interface MessageDeleteResult {
   ok: boolean
   channel: string
   ts: string
+  reason?: string
+}
+
+export interface ScheduledMessageDeleteResult {
+  ok: boolean
+  channel: string
+  scheduledMessageId: string
   reason?: string
 }
 
@@ -116,6 +133,9 @@ export interface ReactionResult {
   ts: string
   reason?: string
 }
+
+export type SlackBlock = Record<string, unknown>
+export type SlackAttachment = Record<string, unknown>
 
 export class SlackError extends Error {
   constructor(message: string, public status: number, public code?: string) {
@@ -223,6 +243,14 @@ interface RawList {
   error?: string
 }
 
+interface RawMembersList {
+  ok?: boolean
+  members?: string[]
+  response_metadata?: { next_cursor?: string }
+  has_more?: boolean
+  error?: string
+}
+
 interface RawChannelInfo {
   ok?: boolean
   channel?: RawChannel
@@ -249,6 +277,23 @@ interface RawDelete {
   ok?: boolean
   channel?: string
   ts?: string
+  error?: string
+}
+
+interface RawScheduledMessage {
+  ok?: boolean
+  channel?: string
+  scheduled_message_id?: string
+  post_at?: string | number | null
+  text?: string
+  user?: string | null
+  error?: string
+}
+
+interface RawDeleteScheduledMessage {
+  ok?: boolean
+  channel?: string
+  scheduled_message_id?: string
   error?: string
 }
 
@@ -463,6 +508,20 @@ export class SlackClient {
     return mapUser(raw.user ?? { id: user })
   }
 
+  async listChannelMembers(
+    channel: string,
+    options: { limit?: number; cursor?: string; signal?: AbortSignal } = {},
+  ): Promise<SlackListResult<string>> {
+    const params = new URLSearchParams({
+      channel,
+      limit: String(Math.max(1, Math.min(options.limit ?? 20, 200))),
+    })
+    if (options.cursor) params.set('cursor', options.cursor)
+    const raw = await this.request<RawMembersList>('conversations.members', { params, signal: options.signal })
+    const nextCursor = raw.response_metadata?.next_cursor ? raw.response_metadata.next_cursor : null
+    return { items: raw.members ?? [], nextCursor, hasMore: Boolean(nextCursor) || raw.has_more === true }
+  }
+
   async searchMessages(
     query: string,
     options: { limit?: number; cursor?: never; signal?: AbortSignal } = {},
@@ -479,26 +538,36 @@ export class SlackClient {
 
   async postMessage(input: {
     channel: string
-    text: string
+    text?: string
+    blocks?: SlackBlock[]
+    attachments?: SlackAttachment[]
     threadTs?: string
     replyBroadcast?: boolean
     mrkdwn?: boolean
     linkNames?: boolean
     unfurlLinks?: boolean
     unfurlMedia?: boolean
+    parse?: string
+    username?: string
+    iconEmoji?: string
+    iconUrl?: string
     asUser?: boolean
     signal?: AbortSignal
   }): Promise<MessageWriteResult> {
-    const body: Record<string, string | boolean> = {
-      channel: input.channel,
-      text: input.text,
-    }
+    const body: Record<string, unknown> = { channel: input.channel }
+    this.addOptional(body, 'text', input.text)
+    this.addOptional(body, 'blocks', input.blocks)
+    this.addOptional(body, 'attachments', input.attachments)
     this.addOptional(body, 'thread_ts', input.threadTs)
     this.addOptional(body, 'reply_broadcast', input.replyBroadcast)
     this.addOptional(body, 'mrkdwn', input.mrkdwn)
     this.addOptional(body, 'link_names', input.linkNames)
     this.addOptional(body, 'unfurl_links', input.unfurlLinks)
     this.addOptional(body, 'unfurl_media', input.unfurlMedia)
+    this.addOptional(body, 'parse', input.parse)
+    this.addOptional(body, 'username', input.username)
+    this.addOptional(body, 'icon_emoji', input.iconEmoji)
+    this.addOptional(body, 'icon_url', input.iconUrl)
     this.addOptional(body, 'as_user', input.asUser)
     const raw = await this.request<RawMessageWrite>('chat.postMessage', {
       init: { method: 'POST', body: JSON.stringify(body) },
@@ -517,14 +586,18 @@ export class SlackClient {
     channel: string
     ts: string
     text?: string
+    blocks?: SlackBlock[]
+    attachments?: SlackAttachment[]
     mrkdwn?: boolean
     linkNames?: boolean
     parse?: string
     asUser?: boolean
     signal?: AbortSignal
   }): Promise<MessageWriteResult> {
-    const body: Record<string, string | boolean> = { channel: input.channel, ts: input.ts }
+    const body: Record<string, unknown> = { channel: input.channel, ts: input.ts }
     this.addOptional(body, 'text', input.text)
+    this.addOptional(body, 'blocks', input.blocks)
+    this.addOptional(body, 'attachments', input.attachments)
     this.addOptional(body, 'mrkdwn', input.mrkdwn)
     this.addOptional(body, 'link_names', input.linkNames)
     this.addOptional(body, 'parse', input.parse)
@@ -539,6 +612,71 @@ export class SlackClient {
       ts: raw.ts ?? input.ts,
       text: raw.message?.text ?? raw.text ?? null,
       user: raw.message?.user ?? null,
+    }
+  }
+
+  async scheduleMessage(input: {
+    channel: string
+    text?: string
+    blocks?: SlackBlock[]
+    attachments?: SlackAttachment[]
+    postAt: string | number
+    threadTs?: string
+    replyBroadcast?: boolean
+    linkNames?: boolean
+    parse?: string
+    unfurlLinks?: boolean
+    unfurlMedia?: boolean
+    asUser?: boolean
+    signal?: AbortSignal
+  }): Promise<ScheduledMessageResult> {
+    const body: Record<string, unknown> = {
+      channel: input.channel,
+      post_at: typeof input.postAt === 'number' ? String(input.postAt) : input.postAt,
+    }
+    this.addOptional(body, 'text', input.text)
+    this.addOptional(body, 'blocks', input.blocks)
+    this.addOptional(body, 'attachments', input.attachments)
+    this.addOptional(body, 'thread_ts', input.threadTs)
+    this.addOptional(body, 'reply_broadcast', input.replyBroadcast)
+    this.addOptional(body, 'link_names', input.linkNames)
+    this.addOptional(body, 'parse', input.parse)
+    this.addOptional(body, 'unfurl_links', input.unfurlLinks)
+    this.addOptional(body, 'unfurl_media', input.unfurlMedia)
+    this.addOptional(body, 'as_user', input.asUser)
+    const raw = await this.request<RawScheduledMessage>('chat.scheduleMessage', {
+      init: { method: 'POST', body: JSON.stringify(body) },
+      signal: input.signal,
+    })
+    return {
+      ok: true,
+      channel: raw.channel ?? input.channel,
+      scheduledMessageId: raw.scheduled_message_id ?? '',
+      postAt: raw.post_at === undefined || raw.post_at === null ? null : String(raw.post_at),
+      text: raw.text ?? null,
+      user: raw.user ?? null,
+    }
+  }
+
+  async deleteScheduledMessage(input: {
+    channel: string
+    scheduledMessageId: string
+    asUser?: boolean
+    signal?: AbortSignal
+  }): Promise<ScheduledMessageDeleteResult> {
+    const body: Record<string, unknown> = {
+      channel: input.channel,
+      scheduled_message_id: input.scheduledMessageId,
+    }
+    this.addOptional(body, 'as_user', input.asUser)
+    const raw = await this.request<RawDeleteScheduledMessage>('chat.deleteScheduledMessage', {
+      init: { method: 'POST', body: JSON.stringify(body) },
+      signal: input.signal,
+    })
+    return {
+      ok: true,
+      channel: raw.channel ?? input.channel,
+      scheduledMessageId: raw.scheduled_message_id ?? input.scheduledMessageId,
     }
   }
 
@@ -572,7 +710,7 @@ export class SlackClient {
     return { ok: true, channel: input.channel, ts: input.timestamp }
   }
 
-  private addOptional(target: Record<string, string | boolean>, key: string, value: string | boolean | undefined): void {
+  private addOptional(target: Record<string, unknown>, key: string, value: unknown): void {
     if (value !== undefined) target[key] = value
   }
 

@@ -7,7 +7,7 @@
 | 项目名 | `dsh-tool-slack` |
 | 发布名 | `@libai168/dsh-tool-slack` |
 | 定位 | DeepSeek Harness（dsh）的独立 Slack Web API 工具插件 |
-| 工具数 | 12（8 只读 + 4 写） |
+| 工具数 | 15（9 只读 + 6 写） |
 | 架构 | `apply` + `createTools(client)`，通过 `ctx.tools.register(defineTool(...))` 注册 |
 | 默认 API | `https://slack.com/api` |
 
@@ -35,8 +35,11 @@
 | `searchMessages` | `GET /api/search.messages` |
 | `listUsers` | `GET /api/users.list` |
 | `getUser` | `GET /api/users.info` |
+| `listChannelMembers` | `GET /api/conversations.members` |
 | `postMessage` | `POST /api/chat.postMessage` |
 | `updateMessage` | `POST /api/chat.update` |
+| `scheduleMessage` | `POST /api/chat.scheduleMessage` |
+| `deleteScheduledMessage` | `POST /api/chat.deleteScheduledMessage` |
 | `deleteMessage` | `POST /api/chat.delete` |
 | `addReaction` | `POST /api/reactions.add` |
 
@@ -52,6 +55,7 @@
 |---|---|---|
 | 2026-08-30 | 选择 Slack 作为新插件方向 | 与代码托管、数据库、错误监控、项目管理、Kubernetes、监控插件不重叠，覆盖团队沟通与通知闭环 |
 | 2026-08-30 | 首批只做 12 个高频工具 | 避免大而全模式，后续可按 Block Kit、文件、日程等方向扩展 |
+| 2026-08-30 | v0.2 扩展为 15 个工具 | 新增频道成员、Block Kit/attachments 富文本参数、定时消息发送/删除 |
 | 2026-08-30 | 不引入运行时依赖 | HTTP 使用全局 fetch，插件打包面保持最小 |
 | 2026-08-30 | 业务失败用规范值 | 资源不存在返回 `{ found: false }`；写失败返回 `{ ok: false, reason }`；基础设施错误抛错 |
 
@@ -67,12 +71,12 @@ npm run build
 验收时确认：
 
 - `npm run typecheck` 无错误。
-- `npm test` 当前 23 例全绿，覆盖客户端 URL/query/body、Slack `ok:false` 错误、分页游标、默认频道、无 token 和工具渲染。
+- `npm test` 当前 30 例全绿，覆盖客户端 URL/query/body、Slack `ok:false` 错误、分页游标、默认频道、无 token 和工具渲染。
 - `npm run build` 输出 `lib/`，`exports.types` 指向生成的声明文件。
 
 ## 5. 后续方向
 
-- 发送带 Block Kit 与 attachments 的富文本消息。
 - 文件上传、下载元信息和 `files.remote` 管理。
-- 频道成员列表、用户群组、scheduled messages。
-- `chat.unpostMessage`、reaction 删除和工作区级权限检查。
+- 查询已排期的 scheduled messages 列表。
+- 用户群组和工作区级权限检查。
+- `chat.unpostMessage` 和 reaction 删除。

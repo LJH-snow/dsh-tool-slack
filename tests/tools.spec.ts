@@ -21,13 +21,16 @@ describe('tool definitions', () => {
       'slack_add_reaction',
       'slack_auth_test',
       'slack_delete_message',
+      'slack_delete_scheduled_message',
       'slack_get_channel',
       'slack_get_user',
+      'slack_list_channel_members',
       'slack_list_channel_messages',
       'slack_list_channels',
       'slack_list_thread_replies',
       'slack_list_users',
       'slack_post_message',
+      'slack_schedule_message',
       'slack_search_messages',
       'slack_update_message',
     ])
@@ -44,6 +47,9 @@ describe('tool definitions', () => {
     })
     expect(await map.slack_post_message.execute({ text: 'hello' }, exec())).toMatchObject({ ok: false })
     expect(await map.slack_delete_message.execute({ ts: '1700000000.100000' }, exec())).toMatchObject({ ok: false })
+    expect(await map.slack_list_channel_members.execute({}, exec())).toMatchObject({ found: false })
+    expect(await map.slack_schedule_message.execute({ postAt: '1770000000' }, exec())).toMatchObject({ ok: false })
+    expect(await map.slack_delete_scheduled_message.execute({ scheduledMessageId: 'Q123' }, exec())).toMatchObject({ ok: false })
   })
 
   it('uses the configured default channel and allows an explicit override', async () => {
@@ -97,6 +103,22 @@ describe('tool definitions', () => {
     expect(String(fetchImpl.mock.calls[0][0])).toContain('count=100')
   })
 
+  it('list_channel_members returns member ids and the next cursor', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      members: ['U1', 'U2'],
+      response_metadata: { next_cursor: 'member-cursor-2' },
+    }))
+    const client = new SlackClient({ token: 't', defaultChannel: 'general', fetchImpl })
+    const map = tools(client)
+    const result = await map.slack_list_channel_members.execute({ limit: 10 }, exec())
+    expect(result).toMatchObject({ found: true, items: ['U1', 'U2'], nextCursor: 'member-cursor-2', hasMore: true })
+    const [url] = fetchImpl.mock.calls[0] as [string]
+    expect(url).toContain('/conversations.members?')
+    expect(url).toContain('channel=general')
+    expect(url).toContain('limit=10')
+  })
+
   it('post_message sends the write and presents an edit card', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(200, {
       ok: true,
@@ -115,6 +137,80 @@ describe('tool definitions', () => {
       mrkdwn: true,
     })
     expect(map.slack_post_message.presentCall!({ channel: 'general', text: 'hello' })).toMatchObject({ card: 'generic', kind: 'edit' })
+  })
+
+  it('post_message and update_message forward blocks and attachments', async () => {
+    const postFetch = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      channel: 'C1',
+      ts: '1700000001.100000',
+      message: { text: null, user: 'U1' },
+    }))
+    const postMap = tools(new SlackClient({ token: 't', defaultChannel: 'general', fetchImpl: postFetch }))
+    await postMap.slack_post_message.execute({
+      blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'Release ready' } }],
+      attachments: [{ color: '#36a64f', text: 'Deploy finished' }],
+      username: 'Release Bot',
+      iconEmoji: ':rocket:',
+    }, exec())
+    expect(JSON.parse(String((postFetch.mock.calls[0] as [string, RequestInit])[1].body))).toMatchObject({
+      channel: 'general',
+      blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'Release ready' } }],
+      attachments: [{ color: '#36a64f', text: 'Deploy finished' }],
+      username: 'Release Bot',
+      icon_emoji: ':rocket:',
+    })
+
+    const updateFetch = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      channel: 'C1',
+      ts: '1700000001.100000',
+      message: { text: null, user: 'U1' },
+    }))
+    const updateMap = tools(new SlackClient({ token: 't', defaultChannel: 'general', fetchImpl: updateFetch }))
+    await updateMap.slack_update_message.execute({
+      ts: '1700000001.100000',
+      blocks: [{ type: 'section', text: { type: 'plain_text', text: 'Updated' } }],
+      attachments: [{ color: '#ff0000', text: 'Rollback' }],
+    }, exec())
+    expect(JSON.parse(String((updateFetch.mock.calls[0] as [string, RequestInit])[1].body))).toMatchObject({
+      channel: 'general',
+      ts: '1700000001.100000',
+      blocks: [{ type: 'section', text: { type: 'plain_text', text: 'Updated' } }],
+      attachments: [{ color: '#ff0000', text: 'Rollback' }],
+    })
+  })
+
+  it('schedule_message and delete_scheduled_message map write results', async () => {
+    const scheduleFetch = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      channel: 'C1',
+      scheduled_message_id: 'Q123',
+      post_at: '1770000000',
+      text: 'hello later',
+      user: 'U1',
+    }))
+    const scheduleMap = tools(new SlackClient({ token: 't', defaultChannel: 'general', fetchImpl: scheduleFetch }))
+    const scheduled = await scheduleMap.slack_schedule_message.execute({ text: 'hello later', postAt: '1770000000' }, exec())
+    expect(scheduled).toEqual({
+      ok: true,
+      channel: 'C1',
+      scheduledMessageId: 'Q123',
+      postAt: '1770000000',
+      text: 'hello later',
+      user: 'U1',
+    })
+    expect(JSON.parse(String((scheduleFetch.mock.calls[0] as [string, RequestInit])[1].body))).toMatchObject({
+      channel: 'general',
+      post_at: '1770000000',
+      text: 'hello later',
+    })
+    expect(scheduleMap.slack_schedule_message.presentCall!({ channel: 'general', postAt: '1770000000' })).toMatchObject({ card: 'generic', kind: 'edit' })
+
+    const deleteFetch = vi.fn(async () => jsonResponse(200, { ok: true, channel: 'C1', scheduled_message_id: 'Q123' }))
+    const deleteMap = tools(new SlackClient({ token: 't', defaultChannel: 'general', fetchImpl: deleteFetch }))
+    expect(await deleteMap.slack_delete_scheduled_message.execute({ scheduledMessageId: 'Q123' }, exec()))
+      .toEqual({ ok: true, channel: 'general', scheduledMessageId: 'Q123' })
   })
 
   it('update_message, delete_message, and add_reaction map write results', async () => {
@@ -143,6 +239,8 @@ describe('tool definitions', () => {
     const map = tools(new SlackClient({ token: 't', defaultChannel: 'general', fetchImpl: vi.fn(async () => jsonResponse(200, { ok: false, error: 'channel_not_found' })) }))
     expect(await map.slack_post_message.execute({ text: 'hello' }, exec())).toMatchObject({ ok: false, reason: 'Slack rejected the message: channel_not_found' })
     expect(await map.slack_update_message.execute({ ts: '1', text: 'x' }, exec())).toMatchObject({ ok: false })
+    expect(await map.slack_schedule_message.execute({ postAt: '1770000000', text: 'x' }, exec())).toMatchObject({ ok: false })
+    expect(await map.slack_delete_scheduled_message.execute({ scheduledMessageId: 'Q123' }, exec())).toMatchObject({ ok: false })
     expect(await map.slack_delete_message.execute({ ts: '1' }, exec())).toMatchObject({ ok: false })
     expect(await map.slack_add_reaction.execute({ timestamp: '1', name: '+1' }, exec())).toMatchObject({ ok: false })
   })

@@ -2,9 +2,9 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-面向 **DeepSeek Harness**（`dsh`）的 Cordis 工具插件，为 Agent 提供聚焦的 Slack 工作流：工作区认证、频道发现、消息历史、线程回复、消息搜索、用户资料，以及常用通知操作。
+面向 **DeepSeek Harness**（`dsh`）的 Cordis 工具插件，为 Agent 提供聚焦的 Slack 工作流：工作区认证、频道发现、频道成员、消息历史、线程回复、消息搜索、用户资料、富文本消息、定时消息，以及常用通知操作。
 
-插件按官方 `ctx.tools.register(defineTool(...))` 契约注册 12 个工具，使用 `presentCall`/`presentResult` 提供紧凑、可回放的界面卡片，并把认证、超时和取消作为一等行为。
+插件按官方 `ctx.tools.register(defineTool(...))` 契约注册 15 个工具，使用 `presentCall`/`presentResult` 提供紧凑、可回放的界面卡片，并把认证、超时和取消作为一等行为。
 
 ## 安装
 
@@ -52,6 +52,7 @@ npm install /path/to/dsh-tool-slack
 | `slack_list_channels` | 列出公开/私密频道，支持分页 | 配置或参数 |
 | `slack_get_channel` | 获取频道元信息、成员数、topic 和 purpose | 配置或参数 |
 | `slack_list_channel_messages` | 列出频道最近消息，可限定时间范围 | 配置或参数 |
+| `slack_list_channel_members` | 列出频道成员对应的 user id | 配置或参数 |
 | `slack_list_thread_replies` | 按父消息 ts 列出线程回复 | 配置或参数 |
 | `slack_search_messages` | 按自由文本搜索消息，返回频道和 permalink | 无 |
 | `slack_list_users` | 列出工作区用户，含资料与角色元信息 | 无 |
@@ -61,8 +62,10 @@ npm install /path/to/dsh-tool-slack
 
 | 工具 | 功能 | 频道来源 |
 |---|---|---|
-| `slack_post_message` | 发送消息或线程回复 | 配置或参数 |
-| `slack_update_message` | 更新已有消息 | 配置或参数 |
+| `slack_post_message` | 发送消息或线程回复，可带 Block Kit/attachments | 配置或参数 |
+| `slack_update_message` | 更新已有消息，可带 Block Kit/attachments | 配置或参数 |
+| `slack_schedule_message` | 定时发送消息 | 配置或参数 |
+| `slack_delete_scheduled_message` | 删除尚未发送的定时消息 | 配置或参数 |
 | `slack_delete_message` | 删除已有消息 | 配置或参数 |
 | `slack_add_reaction` | 给消息添加 reaction | 配置或参数 |
 
