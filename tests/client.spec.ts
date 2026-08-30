@@ -1,0 +1,295 @@
+import { describe, expect, it, vi } from 'vitest'
+import { SlackClient } from '../src/client.ts'
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+}
+
+describe('SlackClient', () => {
+  it('authTest sends the bot token to the Slack Web API base URL', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      team_id: 'T1',
+      team: 'Acme',
+      url: 'https://acme.slack.com',
+      user_id: 'U1',
+      user: 'alice',
+      bot_id: 'B1',
+      is_enterprise_install: false,
+    }))
+    const client = new SlackClient({ token: 'xoxb-test', fetchImpl })
+    const auth = await client.authTest()
+
+    expect(auth).toEqual({
+      ok: true,
+      teamId: 'T1',
+      teamName: 'Acme',
+      url: 'https://acme.slack.com',
+      userId: 'U1',
+      userName: 'alice',
+      botId: 'B1',
+      isEnterpriseInstall: false,
+    })
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://slack.com/api/auth.test')
+    expect(init.headers).toMatchObject({ authorization: 'Bearer xoxb-test' })
+  })
+
+  it('listChannels maps channel fields and returns the next cursor', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      channels: [{
+        id: 'C1',
+        name: 'general',
+        name_normalized: 'general',
+        is_channel: true,
+        is_private: false,
+        is_shared: false,
+        is_archived: false,
+        is_member: true,
+        is_general: true,
+        num_members: 12,
+        created: 1700000000,
+        topic: { value: 'Company updates' },
+        purpose: { value: 'General discussion' },
+      }],
+      response_metadata: { next_cursor: 'cursor-2' },
+    }))
+    const client = new SlackClient({ token: 't', fetchImpl })
+    const result = await client.listChannels({ types: 'public_channel,private_channel', excludeArchived: true, limit: 5 })
+
+    expect(result.hasMore).toBe(true)
+    expect(result.nextCursor).toBe('cursor-2')
+    expect(result.items[0]).toMatchObject({
+      id: 'C1',
+      name: 'general',
+      isChannel: true,
+      isMember: true,
+      isGeneral: true,
+      memberCount: 12,
+      created: '2023-11-14T22:13:20.000Z',
+      topic: 'Company updates',
+      purpose: 'General discussion',
+    })
+    const [url] = fetchImpl.mock.calls[0] as [string]
+    expect(url).toContain('/conversations.list?')
+    expect(url).toContain('limit=5')
+    expect(url).toContain('types=public_channel%2Cprivate_channel')
+    expect(url).toContain('exclude_archived=true')
+  })
+
+  it('getChannel calls conversations.info and maps the nested channel', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      channel: { id: 'C9', name: 'incident-room', name_normalized: 'incident-room', is_private: true, num_members: 3 },
+    }))
+    const client = new SlackClient({ token: 't', fetchImpl })
+    const channel = await client.getChannel('C9')
+    expect(channel).toMatchObject({ id: 'C9', name: 'incident-room', isPrivate: true, memberCount: 3 })
+    const [url] = fetchImpl.mock.calls[0] as [string]
+    expect(url).toContain('/conversations.info?channel=C9')
+  })
+
+  it('listMessages sends history filters and maps hasMore', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      has_more: true,
+      messages: [{
+        type: 'message',
+        user: 'U1',
+        ts: '1700000000.100000',
+        text: 'hello',
+        reply_count: 2,
+        reply_users: ['U2'],
+        reactions: [{ name: '+1', count: 3 }],
+      }],
+      response_metadata: { next_cursor: 'next' },
+    }))
+    const client = new SlackClient({ token: 't', fetchImpl })
+    const result = await client.listMessages('C1', {
+      limit: 50,
+      oldest: '1700000000',
+      latest: '1700000100',
+      inclusive: true,
+    })
+    expect(result).toMatchObject({ hasMore: true, nextCursor: 'next' })
+    expect(result.items[0]).toMatchObject({
+      user: 'U1',
+      ts: '1700000000.100000',
+      text: 'hello',
+      replyCount: 2,
+      reactions: [{ name: '+1', count: 3 }],
+    })
+    const [url] = fetchImpl.mock.calls[0] as [string]
+    expect(url).toContain('/conversations.history?')
+    expect(url).toContain('channel=C1')
+    expect(url).toContain('limit=50')
+    expect(url).toContain('oldest=1700000000')
+    expect(url).toContain('latest=1700000100')
+    expect(url).toContain('inclusive=true')
+  })
+
+  it('listReplies sends thread ts and maps thread messages', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      messages: [{ type: 'message', user: 'U2', ts: '1700000000.200000', thread_ts: '1700000000.100000', text: 'reply' }],
+    }))
+    const client = new SlackClient({ token: 't', fetchImpl })
+    const result = await client.listReplies('C1', '1700000000.100000', { limit: 5 })
+    expect(result.items[0]).toMatchObject({ user: 'U2', threadTs: '1700000000.100000', text: 'reply' })
+    const [url] = fetchImpl.mock.calls[0] as [string]
+    expect(url).toContain('/conversations.replies?')
+    expect(url).toContain('ts=1700000000.100000')
+  })
+
+  it('listUsers and getUser map Slack profile fields', async () => {
+    const listFetch = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      members: [{
+        id: 'U1',
+        team_id: 'T1',
+        name: 'alice',
+        real_name: 'Alice',
+        deleted: false,
+        is_bot: false,
+        is_admin: true,
+        profile: {
+          display_name: 'Alice A',
+          email: 'alice@example.com',
+          title: 'Engineer',
+          image_72: 'https://example.com/a.png',
+          status_text: 'On call',
+          status_emoji: ':bell:',
+        },
+      }],
+      response_metadata: { next_cursor: 'u2' },
+    }))
+    const client = new SlackClient({ token: 't', fetchImpl: listFetch })
+    const users = await client.listUsers({ limit: 10 })
+    expect(users).toMatchObject({ hasMore: true, nextCursor: 'u2' })
+    expect(users.items[0]).toMatchObject({
+      id: 'U1',
+      name: 'alice',
+      displayName: 'Alice A',
+      email: 'alice@example.com',
+      isAdmin: true,
+      statusText: 'On call',
+      statusEmoji: ':bell:',
+    })
+
+    const getFetch = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      user: {
+        id: 'U1',
+        name: 'alice',
+        tz: 'Asia/Shanghai',
+        tz_label: 'China Standard Time',
+        profile: { real_name: 'Alice', image_72: 'https://example.com/a.png' },
+      },
+    }))
+    const getClient = new SlackClient({ token: 't', fetchImpl: getFetch })
+    const user = await getClient.getUser('U1')
+    expect(user).toMatchObject({ id: 'U1', tz: 'Asia/Shanghai', tzLabel: 'China Standard Time' })
+    const [url] = getFetch.mock.calls[0] as [string]
+    expect(url).toContain('/users.info?user=U1')
+  })
+
+  it('searchMessages sends the query and maps matches', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      messages: {
+        matches: [{
+          type: 'message',
+          channel: { id: 'C1', name: 'general' },
+          user: 'U1',
+          username: 'alice',
+          text: 'deployment failed',
+          permalink: 'https://acme.slack.com/archives/C1/p123',
+          ts: '1700000000.100000',
+          team: 'T1',
+        }],
+      },
+    }))
+    const client = new SlackClient({ token: 't', fetchImpl })
+    const result = await client.searchMessages('deployment failed', { limit: 5 })
+    expect(result.items[0]).toMatchObject({
+      channelId: 'C1',
+      channelName: 'general',
+      username: 'alice',
+      text: 'deployment failed',
+      permalink: 'https://acme.slack.com/archives/C1/p123',
+      ts: '1700000000.100000',
+    })
+    const [url] = fetchImpl.mock.calls[0] as [string]
+    expect(url).toContain('/search.messages?')
+    expect(url).toContain('query=deployment+failed')
+    expect(url).toContain('count=5')
+  })
+
+  it('postMessage sends a JSON body and maps the created message', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      channel: 'C1',
+      ts: '1700000000.300000',
+      message: { text: 'hello', user: 'U1' },
+    }))
+    const client = new SlackClient({ token: 't', fetchImpl })
+    const result = await client.postMessage({ channel: 'general', text: 'hello', mrkdwn: true, threadTs: '1700000000.100000' })
+    expect(result).toEqual({ ok: true, channel: 'C1', ts: '1700000000.300000', text: 'hello', user: 'U1' })
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://slack.com/api/chat.postMessage')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({
+      channel: 'general',
+      text: 'hello',
+      thread_ts: '1700000000.100000',
+      mrkdwn: true,
+    })
+  })
+
+  it('updateMessage, deleteMessage, and addReaction send write bodies and map results', async () => {
+    const updateFetch = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      channel: 'C1',
+      ts: '1700000000.100000',
+      message: { text: 'updated', user: 'U1' },
+    }))
+    const updateClient = new SlackClient({ token: 't', fetchImpl: updateFetch })
+    expect(await updateClient.updateMessage({ channel: 'C1', ts: '1700000000.100000', text: 'updated', asUser: true }))
+      .toMatchObject({ ok: true, text: 'updated' })
+    const updateBody = JSON.parse(String((updateFetch.mock.calls[0] as [string, RequestInit])[1].body))
+    expect(updateBody).toEqual({ channel: 'C1', ts: '1700000000.100000', text: 'updated', as_user: true })
+
+    const deleteFetch = vi.fn(async () => jsonResponse(200, { ok: true, channel: 'C1', ts: '1700000000.100000' }))
+    const deleteClient = new SlackClient({ token: 't', fetchImpl: deleteFetch })
+    expect(await deleteClient.deleteMessage({ channel: 'C1', ts: '1700000000.100000', force: true }))
+      .toEqual({ ok: true, channel: 'C1', ts: '1700000000.100000' })
+    const deleteBody = JSON.parse(String((deleteFetch.mock.calls[0] as [string, RequestInit])[1].body))
+    expect(deleteBody).toEqual({ channel: 'C1', ts: '1700000000.100000', force: true })
+
+    const reactionFetch = vi.fn(async () => jsonResponse(200, { ok: true }))
+    const reactionClient = new SlackClient({ token: 't', fetchImpl: reactionFetch })
+    expect(await reactionClient.addReaction({ channel: 'C1', timestamp: '1700000000.100000', name: '+1' }))
+      .toEqual({ ok: true, channel: 'C1', ts: '1700000000.100000' })
+    const reactionBody = JSON.parse(String((reactionFetch.mock.calls[0] as [string, RequestInit])[1].body))
+    expect(reactionBody).toEqual({ channel: 'C1', timestamp: '1700000000.100000', name: '+1' })
+  })
+
+  it('throws SlackError with a code when Slack returns ok:false', async () => {
+    const client = new SlackClient({ token: 't', fetchImpl: vi.fn(async () => jsonResponse(200, { ok: false, error: 'channel_not_found' })) })
+    await expect(client.getChannel('missing')).rejects.toMatchObject({ name: 'SlackError', status: 200, code: 'channel_not_found' })
+  })
+
+  it('throws SlackError for HTTP failures', async () => {
+    const client = new SlackClient({ token: 'bad', fetchImpl: vi.fn(async () => jsonResponse(401, { ok: false, error: 'invalid_auth' })) })
+    await expect(client.authTest()).rejects.toMatchObject({ name: 'SlackError', status: 401, code: 'invalid_auth' })
+  })
+
+  it('strips a trailing slash from a baseUrl override', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: true, team_id: 'T1', team: 'Acme', url: 'u', user_id: 'U1', user: 'alice' }))
+    const client = new SlackClient({ token: 't', baseUrl: 'https://slack.example.com/api/', fetchImpl })
+    await client.authTest()
+    const [url] = fetchImpl.mock.calls[0] as [string]
+    expect(url).toBe('https://slack.example.com/api/auth.test')
+  })
+})

@@ -1,0 +1,78 @@
+# dsh-tool-slack 开发文档
+
+## 1. 项目概览
+
+| 项目 | 说明 |
+|---|---|
+| 项目名 | `dsh-tool-slack` |
+| 发布名 | `@libai168/dsh-tool-slack` |
+| 定位 | DeepSeek Harness（dsh）的独立 Slack Web API 工具插件 |
+| 工具数 | 12（8 只读 + 4 写） |
+| 架构 | `apply` + `createTools(client)`，通过 `ctx.tools.register(defineTool(...))` 注册 |
+| 默认 API | `https://slack.com/api` |
+
+本插件不依赖 GitHub、GitLab 或 monitoring 插件的代码，只复用已验证的插件模式：`SlackClient` 注入 fetch、工具定义与 UI 分离、业务失败返回规范值、基础设施错误抛出。
+
+## 2. 技术要点
+
+### 2.1 客户端
+
+- 认证：`Authorization: Bearer <token>`。
+- `baseUrl` 会去掉末尾 `/`，默认 `https://slack.com/api`。
+- `timeoutMs` 默认 15000；`exec.signal` 会与超时合并到同一个 `AbortController`。
+- 响应始终检查 Slack 的 `ok` 包络；`ok: false` 抛 `SlackError` 并保留 `code`。
+- 列表工具统一返回 `items` / `nextCursor` / `hasMore`，翻页参数透传 `response_metadata.next_cursor`。
+
+### 2.2 使用的 Slack Web API
+
+| 方法 | 端点 |
+|---|---|
+| `authTest` | `GET /api/auth.test` |
+| `listChannels` | `GET /api/conversations.list` |
+| `getChannel` | `GET /api/conversations.info` |
+| `listMessages` | `GET /api/conversations.history` |
+| `listReplies` | `GET /api/conversations.replies` |
+| `searchMessages` | `GET /api/search.messages` |
+| `listUsers` | `GET /api/users.list` |
+| `getUser` | `GET /api/users.info` |
+| `postMessage` | `POST /api/chat.postMessage` |
+| `updateMessage` | `POST /api/chat.update` |
+| `deleteMessage` | `POST /api/chat.delete` |
+| `addReaction` | `POST /api/reactions.add` |
+
+### 2.3 UI 约定
+
+- 每个工具都有 `presentCall`/`presentResult` 和纯 `render`。
+- 列表工具使用 `search` kind；详情工具使用 `read` kind；写操作用 `edit` kind。
+- 输出 schema 中可空字段使用 `oneOf: [string, null]`，避免模型把缺失字段当错误。
+
+## 3. 决策记录
+
+| 时间 | 决策 | 说明 |
+|---|---|---|
+| 2026-08-30 | 选择 Slack 作为新插件方向 | 与代码托管、数据库、错误监控、项目管理、Kubernetes、监控插件不重叠，覆盖团队沟通与通知闭环 |
+| 2026-08-30 | 首批只做 12 个高频工具 | 避免大而全模式，后续可按 Block Kit、文件、日程等方向扩展 |
+| 2026-08-30 | 不引入运行时依赖 | HTTP 使用全局 fetch，插件打包面保持最小 |
+| 2026-08-30 | 业务失败用规范值 | 资源不存在返回 `{ found: false }`；写失败返回 `{ ok: false, reason }`；基础设施错误抛错 |
+
+## 4. 验证命令
+
+```sh
+npm install
+npm run typecheck
+npm test
+npm run build
+```
+
+验收时确认：
+
+- `npm run typecheck` 无错误。
+- `npm test` 当前 23 例全绿，覆盖客户端 URL/query/body、Slack `ok:false` 错误、分页游标、默认频道、无 token 和工具渲染。
+- `npm run build` 输出 `lib/`，`exports.types` 指向生成的声明文件。
+
+## 5. 后续方向
+
+- 发送带 Block Kit 与 attachments 的富文本消息。
+- 文件上传、下载元信息和 `files.remote` 管理。
+- 频道成员列表、用户群组、scheduled messages。
+- `chat.unpostMessage`、reaction 删除和工作区级权限检查。

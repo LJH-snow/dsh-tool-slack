@@ -1,0 +1,16 @@
+# dsh-tool-slack 组合示例
+# 用法：在 dsh 的组合配置中引入本插件（示例片段，按你的部署组合调整）
+#
+# 方式一：从 GitHub 直接加载（无需发布 npm）
+- name: 'github:LJH-snow/dsh-tool-slack'
+# 方式二：发布到 npm 后
+# - name: '@libai168/dsh-tool-slack'
+  config:
+    # Slack Bot Token（必需；Slack Web API 工具需要认证）
+    token: 'xoxb-xxx'
+    # 默认频道（可选；调用时仍可传 channel 覆盖）
+    # defaultChannel: 'general'
+    # Slack Web API 根地址（可选，默认 https://slack.com/api）
+    # baseUrl: 'https://slack.com/api'
+    # 请求超时（毫秒，可选，默认 15000）
+    # timeoutMs: 15000
