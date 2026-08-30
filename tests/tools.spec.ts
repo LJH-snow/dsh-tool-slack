@@ -27,7 +27,11 @@ describe('tool definitions', () => {
       'slack_list_channel_members',
       'slack_list_channel_messages',
       'slack_list_channels',
+      'slack_list_files',
+      'slack_list_scheduled_messages',
       'slack_list_thread_replies',
+      'slack_list_user_group_members',
+      'slack_list_user_groups',
       'slack_list_users',
       'slack_post_message',
       'slack_schedule_message',
@@ -48,6 +52,10 @@ describe('tool definitions', () => {
     expect(await map.slack_post_message.execute({ text: 'hello' }, exec())).toMatchObject({ ok: false })
     expect(await map.slack_delete_message.execute({ ts: '1700000000.100000' }, exec())).toMatchObject({ ok: false })
     expect(await map.slack_list_channel_members.execute({}, exec())).toMatchObject({ found: false })
+    expect(await map.slack_list_scheduled_messages.execute({}, exec())).toMatchObject({ found: false })
+    expect(await map.slack_list_user_groups.execute({}, exec())).toMatchObject({ found: false })
+    expect(await map.slack_list_user_group_members.execute({ usergroup: 'S1' }, exec())).toMatchObject({ found: false })
+    expect(await map.slack_list_files.execute({}, exec())).toMatchObject({ found: false })
     expect(await map.slack_schedule_message.execute({ postAt: '1770000000' }, exec())).toMatchObject({ ok: false })
     expect(await map.slack_delete_scheduled_message.execute({ scheduledMessageId: 'Q123' }, exec())).toMatchObject({ ok: false })
   })
@@ -117,6 +125,95 @@ describe('tool definitions', () => {
     expect(url).toContain('/conversations.members?')
     expect(url).toContain('channel=general')
     expect(url).toContain('limit=10')
+  })
+
+  it('list_scheduled_messages forwards filters and maps items', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      scheduled_messages: [{
+        id: 'Q123',
+        channel_id: 'C1',
+        post_at: '1770000000',
+        date_created: 1700000000,
+        text: 'hello later',
+        user: 'U1',
+      }],
+      response_metadata: { next_cursor: 'scheduled-cursor-2' },
+    }))
+    const client = new SlackClient({ token: 't', defaultChannel: 'general', fetchImpl })
+    const map = tools(client)
+    const result = await map.slack_list_scheduled_messages.execute({ limit: 10, oldest: '1700000000', latest: '1770000000' }, exec())
+
+    expect(result).toMatchObject({ found: true, nextCursor: 'scheduled-cursor-2', hasMore: true })
+    expect(result.items?.[0]).toMatchObject({ id: 'Q123', channelId: 'C1', postAt: '1770000000', text: 'hello later' })
+    const [url] = fetchImpl.mock.calls[0] as [string]
+    expect(url).toContain('/chat.scheduledMessages.list?')
+    expect(url).toContain('channel=general')
+    expect(url).toContain('limit=10')
+    expect(url).toContain('oldest=1700000000')
+    expect(url).toContain('latest=1770000000')
+    expect(map.slack_list_scheduled_messages.presentCall!({ channel: 'general' })).toMatchObject({ card: 'generic', kind: 'search' })
+  })
+
+  it('list_user_groups and list_user_group_members forward filters and map results', async () => {
+    const groupFetch = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      usergroups: [{
+        id: 'S1',
+        name: 'On Call',
+        description: 'Operators',
+        handle: 'oncall',
+        user_count: 2,
+        users: ['U1', 'U2'],
+      }],
+    }))
+    const groupMap = tools(new SlackClient({ token: 't', fetchImpl: groupFetch }))
+    const groups = await groupMap.slack_list_user_groups.execute({ includeUsers: true, includeCount: true, includeDisabled: true }, exec())
+    expect(groups).toMatchObject({ found: true, items: [{ name: 'On Call', handle: 'oncall', userCount: 2 }] })
+    expect(String(groupFetch.mock.calls[0][0])).toContain('/usergroups.list?')
+    expect(String(groupFetch.mock.calls[0][0])).toContain('include_users=true')
+    expect(String(groupFetch.mock.calls[0][0])).toContain('include_count=true')
+    expect(String(groupFetch.mock.calls[0][0])).toContain('include_disabled=true')
+
+    const memberFetch = vi.fn(async () => jsonResponse(200, { ok: true, users: ['U1', 'U2'] }))
+    const memberMap = tools(new SlackClient({ token: 't', fetchImpl: memberFetch }))
+    const members = await memberMap.slack_list_user_group_members.execute({ usergroup: 'S1', includeDisabled: true }, exec())
+    expect(members).toEqual({ found: true, items: ['U1', 'U2'], nextCursor: null, hasMore: false })
+    expect(String(memberFetch.mock.calls[0][0])).toContain('/usergroups.users.list?')
+    expect(String(memberFetch.mock.calls[0][0])).toContain('usergroup=S1')
+    expect(String(memberFetch.mock.calls[0][0])).toContain('include_disabled=true')
+  })
+
+  it('list_files forwards filters and maps file metadata with paging', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      files: [{
+        id: 'F1',
+        name: 'incident.md',
+        title: 'Incident notes',
+        user: 'U1',
+        channel: 'C1',
+        created: 1700000000,
+        timestamp: 1700000000.123,
+        mimetype: 'text/markdown',
+        filetype: 'text',
+        size: 42,
+      }],
+      paging: { count: 1, total: 3, page: 1, pages: 3 },
+    }))
+    const client = new SlackClient({ token: 't', defaultChannel: 'general', fetchImpl })
+    const map = tools(client)
+    const result = await map.slack_list_files.execute({ types: 'spaces', limit: 10, page: 1 }, exec())
+
+    expect(result).toMatchObject({ found: true, page: 1, pages: 3, total: 3, hasMore: true })
+    expect(result.items?.[0]).toMatchObject({ id: 'F1', name: 'incident.md', fileType: 'text', size: 42 })
+    const [url] = fetchImpl.mock.calls[0] as [string]
+    expect(url).toContain('/files.list?')
+    expect(url).toContain('channel=general')
+    expect(url).toContain('count=10')
+    expect(url).toContain('page=1')
+    expect(url).toContain('types=spaces')
+    expect(map.slack_list_files.presentCall!({ channel: 'general' })).toMatchObject({ card: 'generic', kind: 'search' })
   })
 
   it('post_message sends the write and presents an edit card', async () => {

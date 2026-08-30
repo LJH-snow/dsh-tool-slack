@@ -2,9 +2,9 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-A Cordis tool plugin that gives [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) focused Slack workflows: workspace auth checks, channel discovery, channel members, message history, thread replies, message search, user profiles, rich messages, scheduled messages, and common notification actions.
+A Cordis tool plugin that gives [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) focused Slack workflows: workspace auth checks, channel discovery, channel members, message history, thread replies, message search, user profiles, user groups, file metadata, rich messages, scheduled messages, and common notification actions.
 
-The plugin registers 15 tools with the official `ctx.tools.register(defineTool(...))` contract, uses `presentCall`/`presentResult` for compact replay-friendly UI cards, and treats authentication, request timeout, and cancellation as first-class concerns.
+The plugin registers 19 tools with the official `ctx.tools.register(defineTool(...))` contract, uses `presentCall`/`presentResult` for compact replay-friendly UI cards, and treats authentication, request timeout, and cancellation as first-class concerns.
 
 ## Install
 
@@ -53,9 +53,13 @@ Full example: [examples/cordis.yml](examples/cordis.yml).
 | `slack_get_channel` | Get channel metadata, member count, topic, and purpose | config or arg |
 | `slack_list_channel_messages` | List recent channel messages, optionally by time range | config or arg |
 | `slack_list_channel_members` | List user ids that are members of a channel | config or arg |
+| `slack_list_scheduled_messages` | List scheduled messages with channel/time filters and pagination | config or arg |
 | `slack_list_thread_replies` | List replies in a thread by parent message ts | config or arg |
 | `slack_search_messages` | Search messages by free text with channel and permalink | n/a |
 | `slack_list_users` | List workspace users with profile and role metadata | n/a |
+| `slack_list_user_groups` | List workspace user groups with member counts and optional users | n/a |
+| `slack_list_user_group_members` | List member user ids for a user group | n/a |
+| `slack_list_files` | List file metadata with channel/user/type/time filters and paging | config or arg |
 | `slack_get_user` | Get one user profile by Slack user id | n/a |
 
 ### Write

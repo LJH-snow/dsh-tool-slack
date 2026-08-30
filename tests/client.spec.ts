@@ -210,6 +210,142 @@ describe('SlackClient', () => {
     expect(url).toContain('limit=5')
   })
 
+  it('listScheduledMessages maps scheduled messages and pagination', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      scheduled_messages: [{
+        id: 'Q123',
+        channel_id: 'C1',
+        post_at: '1770000000',
+        date_created: 1700000000,
+        text: 'hello later',
+        user: 'U1',
+      }],
+      response_metadata: { next_cursor: 'scheduled-cursor-2' },
+      has_more: true,
+    }))
+    const client = new SlackClient({ token: 't', fetchImpl })
+    const result = await client.listScheduledMessages('C1', {
+      limit: 5,
+      cursor: 'scheduled-cursor-1',
+      oldest: '1700000000',
+      latest: '1770000000',
+    })
+
+    expect(result).toMatchObject({
+      nextCursor: 'scheduled-cursor-2',
+      hasMore: true,
+    })
+    expect(result.items[0]).toMatchObject({
+      id: 'Q123',
+      channelId: 'C1',
+      postAt: '1770000000',
+      createdAt: '2023-11-14T22:13:20.000Z',
+      text: 'hello later',
+      user: 'U1',
+    })
+    const [url] = fetchImpl.mock.calls[0] as [string]
+    expect(url).toContain('/chat.scheduledMessages.list?')
+    expect(url).toContain('channel=C1')
+    expect(url).toContain('limit=5')
+    expect(url).toContain('oldest=1700000000')
+    expect(url).toContain('latest=1770000000')
+  })
+
+  it('listUserGroups and listUserGroupMembers map groups and member ids', async () => {
+    const groupFetch = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      usergroups: [{
+        id: 'S1',
+        team_id: 'T1',
+        is_usergroup: true,
+        name: 'On Call',
+        description: 'Operators',
+        handle: 'oncall',
+        is_external: false,
+        created_by: 'U1',
+        updated_by: 'U2',
+        user_count: 2,
+        users: ['U1', 'U2'],
+      }],
+    }))
+    const groupClient = new SlackClient({ token: 't', fetchImpl: groupFetch })
+    const groups = await groupClient.listUserGroups({ includeUsers: true, includeCount: true, includeDisabled: true })
+    expect(groups.items[0]).toMatchObject({
+      id: 'S1',
+      name: 'On Call',
+      handle: 'oncall',
+      userCount: 2,
+      users: ['U1', 'U2'],
+      isExternal: false,
+    })
+    const [groupUrl] = groupFetch.mock.calls[0] as [string]
+    expect(groupUrl).toContain('/usergroups.list?')
+    expect(groupUrl).toContain('include_users=true')
+    expect(groupUrl).toContain('include_count=true')
+    expect(groupUrl).toContain('include_disabled=true')
+
+    const memberFetch = vi.fn(async () => jsonResponse(200, { ok: true, users: ['U1', 'U2'] }))
+    const memberClient = new SlackClient({ token: 't', fetchImpl: memberFetch })
+    const members = await memberClient.listUserGroupMembers('S1', { includeDisabled: true })
+    expect(members).toEqual({ items: ['U1', 'U2'], nextCursor: null, hasMore: false })
+    const [memberUrl] = memberFetch.mock.calls[0] as [string]
+    expect(memberUrl).toContain('/usergroups.users.list?')
+    expect(memberUrl).toContain('usergroup=S1')
+    expect(memberUrl).toContain('include_disabled=true')
+  })
+
+  it('listFiles maps file metadata and file-list paging', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {
+      ok: true,
+      files: [{
+        id: 'F1',
+        name: 'incident.md',
+        title: 'Incident notes',
+        user: 'U1',
+        channel: 'C1',
+        created: 1700000000,
+        timestamp: 1700000000.123,
+        updated: 1700000100,
+        mimetype: 'text/markdown',
+        filetype: 'text',
+        size: 42,
+        permalink: 'https://acme.slack.com/files/U1/F1/incident.md',
+        url_private: 'https://files.slack.com/files-pri/T1-F1',
+        is_public: false,
+      }],
+      paging: { count: 1, total: 3, page: 1, pages: 3 },
+    }))
+    const client = new SlackClient({ token: 't', fetchImpl })
+    const result = await client.listFiles({ channel: 'C1', user: 'U1', types: 'spaces', tsFrom: '1', tsTo: '2', limit: 1, page: 1 })
+
+    expect(result).toMatchObject({ page: 1, pages: 3, total: 3, hasMore: true })
+    expect(result.items[0]).toMatchObject({
+      id: 'F1',
+      name: 'incident.md',
+      title: 'Incident notes',
+      userId: 'U1',
+      channelId: 'C1',
+      createdAt: '2023-11-14T22:13:20.000Z',
+      timestamp: '1700000000.123',
+      updatedAt: '2023-11-14T22:15:00.000Z',
+      mimeType: 'text/markdown',
+      fileType: 'text',
+      size: 42,
+      permalink: 'https://acme.slack.com/files/U1/F1/incident.md',
+      isPublic: false,
+    })
+    const [url] = fetchImpl.mock.calls[0] as [string]
+    expect(url).toContain('/files.list?')
+    expect(url).toContain('count=1')
+    expect(url).toContain('page=1')
+    expect(url).toContain('channel=C1')
+    expect(url).toContain('user=U1')
+    expect(url).toContain('types=spaces')
+    expect(url).toContain('ts_from=1')
+    expect(url).toContain('ts_to=2')
+  })
+
   it('searchMessages sends the query and maps matches', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(200, {
       ok: true,

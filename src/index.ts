@@ -560,6 +560,285 @@ export function createTools(client: SlackClient) {
     }),
 
     defineTool({
+      name: 'slack_list_scheduled_messages',
+      description: 'List Slack messages scheduled for later delivery, with optional channel and time range filters.',
+      parameters: {
+        channel: { type: 'string', description: 'Channel id or name; defaults to plugin config when omitted' },
+        limit: { type: 'integer', description: 'Maximum results, 1-200 (default 20)' },
+        cursor: { type: 'string', description: 'Opaque cursor from a previous response nextCursor' },
+        oldest: { type: 'string', description: 'Start of the time range as a Unix timestamp (including fractional seconds)' },
+        latest: { type: 'string', description: 'End of the time range as a Unix timestamp (including fractional seconds)' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            found: { type: 'boolean', description: 'Whether scheduled messages are accessible' },
+            reason: { type: 'string', description: 'Explanation when not accessible' },
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  id: { type: 'string', description: 'Scheduled message id' },
+                  channelId: { type: 'string', description: 'Channel id' },
+                  postAt: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Unix timestamp when Slack will send the message' },
+                  createdAt: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Creation timestamp' },
+                  text: { type: 'string', description: 'Message text' },
+                  user: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Author user id' },
+                },
+              },
+            },
+            nextCursor: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Cursor for the next page' },
+            hasMore: { type: 'boolean', description: 'Whether more scheduled messages are available' },
+          },
+        },
+        render: (_args, value) => {
+          if (!value.found) return [{ type: 'text', text: 'Scheduled messages are not accessible.' }]
+          const items = value.items ?? []
+          if (items.length === 0) return [{ type: 'text', text: 'No scheduled messages found.' }]
+          return [{ type: 'text', text: items.map(item => `${item.id} (${item.channelId}) at ${item.postAt}: ${item.text}`).join('\n') }]
+        },
+      },
+      presentCall(args): ToolCallView {
+        return { card: 'generic', title: `Scheduled messages in ${resolveChannelLabel(client, args)}`, kind: 'search' }
+      },
+      presentResult(_args, result): ToolResultView | undefined {
+        const v = result as unknown as { found?: boolean; items?: unknown[] }
+        if (!v.found) return { card: 'generic', title: 'Scheduled messages not accessible' }
+        return { card: 'generic', title: `${(v.items ?? []).length} scheduled message(s)` }
+      },
+      async execute(args, exec) {
+        if (!client.hasToken()) return { found: false, items: [], reason: 'Listing scheduled Slack messages requires a bot token.' }
+        const limit = args.limit === undefined ? 20 : Math.max(1, Math.min(Number(args.limit), 200))
+        try {
+          const channel = resolveChannel(client, args) ?? undefined
+          const result = await client.listScheduledMessages(channel, {
+            limit,
+            cursor: args.cursor,
+            oldest: args.oldest,
+            latest: args.latest,
+            signal: exec.signal,
+          })
+          return { found: true, ...result }
+        } catch (error) {
+          if (error instanceof SlackError && error.code === 'channel_not_found') {
+            return { found: false, items: [], reason: 'Channel not found.' }
+          }
+          throw error
+        }
+      },
+    }),
+
+    defineTool({
+      name: 'slack_list_user_groups',
+      description: 'List Slack user groups visible to the bot, with handles, descriptions, and member counts.',
+      parameters: {
+        includeUsers: { type: 'boolean', description: 'Include member user ids for each user group' },
+        includeCount: { type: 'boolean', description: 'Include the user count for each user group' },
+        includeDisabled: { type: 'boolean', description: 'Include disabled user groups' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            found: { type: 'boolean', description: 'Whether user groups are accessible' },
+            reason: { type: 'string', description: 'Explanation when not accessible' },
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  id: { type: 'string', description: 'User group id' },
+                  teamId: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Team id' },
+                  isUsergroup: { type: 'boolean', description: 'Whether this is a user group' },
+                  name: { type: 'string', description: 'User group display name' },
+                  description: { type: 'string', description: 'User group description' },
+                  handle: { type: 'string', description: 'User group handle' },
+                  isExternal: { type: 'boolean', description: 'Whether the user group is external' },
+                  createdBy: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Creator user id' },
+                  updatedBy: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Last updater user id' },
+                  deleted: { type: 'boolean', description: 'Whether the user group is deleted' },
+                  userCount: { type: 'integer', description: 'Member count' },
+                  users: { type: 'array', items: { type: 'string' }, description: 'Member user ids when includeUsers is true' },
+                },
+              },
+            },
+            nextCursor: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Cursor for the next page' },
+            hasMore: { type: 'boolean', description: 'Whether more user groups are available' },
+          },
+        },
+        render: (_args, value) => {
+          if (!value.found) return [{ type: 'text', text: 'User groups are not accessible.' }]
+          const items = value.items ?? []
+          if (items.length === 0) return [{ type: 'text', text: 'No user groups found.' }]
+          return [{ type: 'text', text: items.map(item => `@${item.handle} ${item.name} (${item.userCount ?? 0} members)${item.isExternal ? ' [external]' : ''}`).join('\n') }]
+        },
+      },
+      presentCall(args): ToolCallView {
+        return { card: 'generic', title: `Slack user groups (${args.includeDisabled ? 'including disabled' : 'active'})`, kind: 'search' }
+      },
+      presentResult(_args, result): ToolResultView | undefined {
+        const v = result as unknown as { found?: boolean; items?: unknown[] }
+        if (!v.found) return { card: 'generic', title: 'User groups not accessible' }
+        return { card: 'generic', title: `${(v.items ?? []).length} user group(s)` }
+      },
+      async execute(args, exec) {
+        if (!client.hasToken()) return { found: false, items: [], reason: 'Listing Slack user groups requires a bot token.' }
+        const result = await client.listUserGroups({
+          includeUsers: args.includeUsers,
+          includeCount: args.includeCount,
+          includeDisabled: args.includeDisabled,
+          signal: exec.signal,
+        })
+        return { found: true, ...result }
+      },
+    }),
+
+    defineTool({
+      name: 'slack_list_user_group_members',
+      description: 'List the user ids that are members of a Slack user group.',
+      parameters: {
+        usergroup: { type: 'string', required: true, description: 'User group id, e.g. S0615G3KT' },
+        includeDisabled: { type: 'boolean', description: 'Include disabled members' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            found: { type: 'boolean', description: 'Whether user group members are accessible' },
+            reason: { type: 'string', description: 'Explanation when not accessible' },
+            items: { type: 'array', items: { type: 'string' }, description: 'Slack user ids in the user group' },
+            nextCursor: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Cursor for the next page' },
+            hasMore: { type: 'boolean', description: 'Whether more members are available' },
+          },
+        },
+        render: (_args, value) => {
+          if (!value.found) return [{ type: 'text', text: 'User group members are not accessible.' }]
+          const items = value.items ?? []
+          if (items.length === 0) return [{ type: 'text', text: 'No user group members found.' }]
+          return [{ type: 'text', text: items.join('\n') }]
+        },
+      },
+      presentCall(args): ToolCallView {
+        return { card: 'generic', title: `Members of user group ${args.usergroup}`, kind: 'read' }
+      },
+      presentResult(_args, result): ToolResultView | undefined {
+        const v = result as unknown as { found?: boolean; items?: unknown[] }
+        if (!v.found) return { card: 'generic', title: 'User group members not accessible' }
+        return { card: 'generic', title: `${(v.items ?? []).length} member(s)` }
+      },
+      async execute(args, exec) {
+        if (!client.hasToken()) return { found: false, items: [], reason: 'Listing Slack user group members requires a bot token.' }
+        try {
+          const result = await client.listUserGroupMembers(args.usergroup as string, {
+            includeDisabled: args.includeDisabled,
+            signal: exec.signal,
+          })
+          return { found: true, ...result }
+        } catch (error) {
+          if (error instanceof SlackError && (error.code === 'usergroup_not_found' || error.code === 'invalid_usergroup')) {
+            return { found: false, items: [], reason: 'User group not found.' }
+          }
+          throw error
+        }
+      },
+    }),
+
+    defineTool({
+      name: 'slack_list_files',
+      description: 'List Slack file metadata for a team, channel, or user, with filters and paging.',
+      parameters: {
+        channel: { type: 'string', description: 'Channel id or name; defaults to plugin config when omitted' },
+        user: { type: 'string', description: 'Filter files created by a Slack user id' },
+        types: { type: 'string', description: 'Comma-separated file types, e.g. spaces,snippets' },
+        tsFrom: { type: 'string', description: 'Filter files created after this Unix timestamp (inclusive)' },
+        tsTo: { type: 'string', description: 'Filter files created before this Unix timestamp (inclusive)' },
+        limit: { type: 'integer', description: 'Maximum results, 1-200 (default 20)' },
+        page: { type: 'integer', description: 'Page number (default 1)' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            found: { type: 'boolean', description: 'Whether files are accessible' },
+            reason: { type: 'string', description: 'Explanation when not accessible' },
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  id: { type: 'string', description: 'File id' },
+                  name: { type: 'string', description: 'File name' },
+                  title: { type: 'string', description: 'File title' },
+                  userId: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Uploader user id' },
+                  channelId: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Channel id' },
+                  createdAt: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Creation timestamp' },
+                  timestamp: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'File timestamp' },
+                  updatedAt: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Last update timestamp' },
+                  mimeType: { type: 'string', description: 'MIME type' },
+                  fileType: { type: 'string', description: 'Slack file type' },
+                  size: { type: 'integer', description: 'File size in bytes' },
+                  permalink: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Public permalink' },
+                  urlPrivate: { oneOf: [{ type: 'string' }, { type: 'null' }], description: 'Private download URL' },
+                  isPublic: { type: 'boolean', description: 'Whether the file is public' },
+                },
+              },
+            },
+            page: { type: 'integer', description: 'Current page' },
+            pages: { type: 'integer', description: 'Total pages' },
+            total: { type: 'integer', description: 'Total files' },
+            hasMore: { type: 'boolean', description: 'Whether more files are available' },
+          },
+        },
+        render: (_args, value) => {
+          if (!value.found) return [{ type: 'text', text: 'Files are not accessible.' }]
+          const items = value.items ?? []
+          if (items.length === 0) return [{ type: 'text', text: 'No files found.' }]
+          return [{ type: 'text', text: items.map(item => `${item.name || item.title} [${item.fileType}] ${item.size ?? 0} bytes by ${item.userId ?? 'unknown'}`).join('\n') }]
+        },
+      },
+      presentCall(args): ToolCallView {
+        return { card: 'generic', title: `Files in ${resolveChannelLabel(client, args)}`, kind: 'search' }
+      },
+      presentResult(_args, result): ToolResultView | undefined {
+        const v = result as unknown as { found?: boolean; items?: unknown[]; total?: number }
+        if (!v.found) return { card: 'generic', title: 'Files not accessible' }
+        return { card: 'generic', title: `${v.total ?? (v.items ?? []).length} file(s)` }
+      },
+      async execute(args, exec) {
+        if (!client.hasToken()) return { found: false, items: [], reason: 'Listing Slack files requires a bot token.' }
+        const channel = resolveChannel(client, args) ?? undefined
+        const limit = args.limit === undefined ? 20 : Math.max(1, Math.min(Number(args.limit), 200))
+        try {
+          const result = await client.listFiles({
+            channel,
+            user: args.user,
+            types: args.types,
+            tsFrom: args.tsFrom,
+            tsTo: args.tsTo,
+            limit,
+            page: args.page,
+            signal: exec.signal,
+          })
+          return { found: true, ...result }
+        } catch (error) {
+          if (error instanceof SlackError && (error.code === 'channel_not_found' || error.code === 'user_not_found')) {
+            return { found: false, items: [], reason: 'Channel or user not found.' }
+          }
+          throw error
+        }
+      },
+    }),
+
+    defineTool({
       name: 'slack_get_user',
       description: 'Get one Slack user profile: name, email, title, timezone, roles, and current status.',
       parameters: {

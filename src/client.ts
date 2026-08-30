@@ -88,6 +88,55 @@ export interface SearchMessageInfo {
   botId: string | null
 }
 
+export interface ScheduledMessageInfo {
+  id: string
+  channelId: string
+  postAt: string | null
+  createdAt: string | null
+  text: string
+  user: string | null
+}
+
+export interface UserGroupInfo {
+  id: string
+  teamId: string | null
+  isUsergroup: boolean
+  name: string
+  description: string
+  handle: string
+  isExternal: boolean
+  createdBy: string | null
+  updatedBy: string | null
+  deleted: boolean
+  userCount: number
+  users: string[]
+}
+
+export interface FileInfo {
+  id: string
+  name: string
+  title: string
+  userId: string | null
+  channelId: string | null
+  createdAt: string | null
+  timestamp: string | null
+  updatedAt: string | null
+  mimeType: string
+  fileType: string
+  size: number
+  permalink: string | null
+  urlPrivate: string | null
+  isPublic: boolean
+}
+
+export interface FileListResult {
+  items: FileInfo[]
+  page: number
+  pages: number
+  total: number
+  hasMore: boolean
+}
+
 export interface SlackListResult<T> {
   items: T[]
   nextCursor: string | null
@@ -230,6 +279,74 @@ interface RawSearch {
     matches?: RawSearchMatch[]
     paging?: { count?: number; total?: number; page?: number; pages?: number }
   }
+  error?: string
+}
+
+interface RawScheduledMessageInfo {
+  id?: string
+  channel_id?: string
+  post_at?: string | number | null
+  date_created?: number
+  text?: string
+  user?: string | null
+}
+
+interface RawScheduledMessagesList {
+  ok?: boolean
+  scheduled_messages?: RawScheduledMessageInfo[]
+  response_metadata?: { next_cursor?: string }
+  has_more?: boolean
+  error?: string
+}
+
+interface RawUserGroup {
+  id?: string
+  team_id?: string | null
+  is_usergroup?: boolean
+  name?: string
+  description?: string
+  handle?: string
+  is_external?: boolean
+  created_by?: string | null
+  updated_by?: string | null
+  deleted?: boolean
+  user_count?: number
+  users?: string[]
+}
+
+interface RawUserGroupList {
+  ok?: boolean
+  usergroups?: RawUserGroup[]
+  error?: string
+}
+
+interface RawUserGroupMembersList {
+  ok?: boolean
+  users?: string[]
+  error?: string
+}
+
+interface RawFile {
+  id?: string
+  name?: string
+  title?: string
+  user?: string | null
+  channel?: string | null
+  created?: number
+  timestamp?: number
+  updated?: number
+  mimetype?: string
+  filetype?: string
+  size?: number
+  permalink?: string | null
+  url_private?: string | null
+  is_public?: boolean
+}
+
+interface RawFileList {
+  ok?: boolean
+  files?: RawFile[]
+  paging?: { count?: number; total?: number; page?: number; pages?: number }
   error?: string
 }
 
@@ -401,6 +518,57 @@ function mapSearchMessage(raw: RawSearchMatch): SearchMessageInfo {
   }
 }
 
+function epochToIso(seconds?: number): string | null {
+  return typeof seconds === 'number' && Number.isFinite(seconds) ? new Date(seconds * 1000).toISOString() : null
+}
+
+function mapScheduledMessage(raw: RawScheduledMessageInfo): ScheduledMessageInfo {
+  return {
+    id: raw.id ?? '',
+    channelId: raw.channel_id ?? '',
+    postAt: raw.post_at === undefined || raw.post_at === null ? null : String(raw.post_at),
+    createdAt: epochToIso(raw.date_created),
+    text: raw.text ?? '',
+    user: raw.user ?? null,
+  }
+}
+
+function mapUserGroup(raw: RawUserGroup): UserGroupInfo {
+  return {
+    id: raw.id ?? '',
+    teamId: raw.team_id ?? null,
+    isUsergroup: raw.is_usergroup ?? false,
+    name: raw.name ?? raw.id ?? '',
+    description: raw.description ?? '',
+    handle: raw.handle ?? raw.name ?? raw.id ?? '',
+    isExternal: raw.is_external ?? false,
+    createdBy: raw.created_by ?? null,
+    updatedBy: raw.updated_by ?? null,
+    deleted: raw.deleted ?? false,
+    userCount: raw.user_count ?? 0,
+    users: raw.users ?? [],
+  }
+}
+
+function mapFile(raw: RawFile): FileInfo {
+  return {
+    id: raw.id ?? '',
+    name: raw.name ?? '',
+    title: raw.title ?? raw.name ?? '',
+    userId: raw.user ?? null,
+    channelId: raw.channel ?? null,
+    createdAt: epochToIso(raw.created),
+    timestamp: typeof raw.timestamp === 'number' ? String(raw.timestamp) : null,
+    updatedAt: epochToIso(raw.updated),
+    mimeType: raw.mimetype ?? '',
+    fileType: raw.filetype ?? '',
+    size: raw.size ?? 0,
+    permalink: raw.permalink ?? null,
+    urlPrivate: raw.url_private ?? null,
+    isPublic: raw.is_public ?? false,
+  }
+}
+
 function listResult<T>(items: T[], raw: RawList): SlackListResult<T> {
   const nextCursor = raw.response_metadata?.next_cursor ? raw.response_metadata.next_cursor : null
   return { items, nextCursor, hasMore: Boolean(nextCursor) || raw.has_more === true }
@@ -520,6 +688,76 @@ export class SlackClient {
     const raw = await this.request<RawMembersList>('conversations.members', { params, signal: options.signal })
     const nextCursor = raw.response_metadata?.next_cursor ? raw.response_metadata.next_cursor : null
     return { items: raw.members ?? [], nextCursor, hasMore: Boolean(nextCursor) || raw.has_more === true }
+  }
+
+  async listScheduledMessages(
+    channel?: string,
+    options: { limit?: number; cursor?: string; oldest?: string; latest?: string; signal?: AbortSignal } = {},
+  ): Promise<SlackListResult<ScheduledMessageInfo>> {
+    const params = new URLSearchParams({
+      limit: String(Math.max(1, Math.min(options.limit ?? 20, 200))),
+    })
+    if (channel) params.set('channel', channel)
+    if (options.cursor) params.set('cursor', options.cursor)
+    if (options.oldest) params.set('oldest', options.oldest)
+    if (options.latest) params.set('latest', options.latest)
+    const raw = await this.request<RawScheduledMessagesList>('chat.scheduledMessages.list', { params, signal: options.signal })
+    const nextCursor = raw.response_metadata?.next_cursor ? raw.response_metadata.next_cursor : null
+    return {
+      items: (raw.scheduled_messages ?? []).map(mapScheduledMessage),
+      nextCursor,
+      hasMore: Boolean(nextCursor) || raw.has_more === true,
+    }
+  }
+
+  async listUserGroups(options: {
+    includeUsers?: boolean
+    includeCount?: boolean
+    includeDisabled?: boolean
+    signal?: AbortSignal
+  } = {}): Promise<SlackListResult<UserGroupInfo>> {
+    const params = new URLSearchParams()
+    if (options.includeUsers !== undefined) params.set('include_users', options.includeUsers ? 'true' : 'false')
+    if (options.includeCount !== undefined) params.set('include_count', options.includeCount ? 'true' : 'false')
+    if (options.includeDisabled !== undefined) params.set('include_disabled', options.includeDisabled ? 'true' : 'false')
+    const raw = await this.request<RawUserGroupList>('usergroups.list', { params, signal: options.signal })
+    return { items: (raw.usergroups ?? []).map(mapUserGroup), nextCursor: null, hasMore: false }
+  }
+
+  async listUserGroupMembers(
+    usergroup: string,
+    options: { includeDisabled?: boolean; signal?: AbortSignal } = {},
+  ): Promise<SlackListResult<string>> {
+    const params = new URLSearchParams({ usergroup })
+    if (options.includeDisabled !== undefined) params.set('include_disabled', options.includeDisabled ? 'true' : 'false')
+    const raw = await this.request<RawUserGroupMembersList>('usergroups.users.list', { params, signal: options.signal })
+    return { items: raw.users ?? [], nextCursor: null, hasMore: false }
+  }
+
+  async listFiles(options: {
+    channel?: string
+    user?: string
+    types?: string
+    tsFrom?: string
+    tsTo?: string
+    limit?: number
+    page?: number
+    signal?: AbortSignal
+  } = {}): Promise<FileListResult> {
+    const params = new URLSearchParams({
+      count: String(Math.max(1, Math.min(options.limit ?? 20, 200))),
+      page: String(Math.max(1, Math.floor(options.page ?? 1))),
+    })
+    if (options.channel) params.set('channel', options.channel)
+    if (options.user) params.set('user', options.user)
+    if (options.types) params.set('types', options.types)
+    if (options.tsFrom) params.set('ts_from', options.tsFrom)
+    if (options.tsTo) params.set('ts_to', options.tsTo)
+    const raw = await this.request<RawFileList>('files.list', { params, signal: options.signal })
+    const items = (raw.files ?? []).map(mapFile)
+    const page = raw.paging?.page ?? options.page ?? 1
+    const pages = raw.paging?.pages ?? 1
+    return { items, page, pages, total: raw.paging?.total ?? items.length, hasMore: page < pages }
   }
 
   async searchMessages(
