@@ -42,6 +42,8 @@ npm install /path/to/dsh-tool-slack
 
 完整示例见 [examples/cordis.yml](examples/cordis.yml)。
 
+`baseUrl` 覆盖必须是绝对的 `http://` 或 `https://` 根地址。只允许公网可达主机：localhost、环回、私有、链路本地、CGNAT、组播、保留/文档/基准测试网段以及全部 IANA 特殊用途地址段都会被拒绝；DNS 结果包含任一此类地址时会在发出请求前 fail closed。不允许 credentials、query、fragment 或非根路径。
+
 ## 工具列表
 
 ### 只读

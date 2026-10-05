@@ -1,5 +1,7 @@
 /** Slack Web API client with injected fetch for testability. */
 
+import { assertSafeUrl, EndpointSecurityError, normalizeBaseUrl, type LookupImpl } from './url-security.js'
+
 export interface SlackClientOptions {
   token?: string
   /** Optional default channel used when tools are called without an explicit channel. */
@@ -9,6 +11,8 @@ export interface SlackClientOptions {
   fetchImpl?: typeof fetch
   /** Request timeout in milliseconds. 0 disables the timeout. */
   timeoutMs?: number
+  /** Test-only DNS lookup override; production uses node:dns/promises. */
+  lookupImpl?: LookupImpl
 }
 
 export interface AuthInfo {
@@ -579,12 +583,19 @@ export class SlackClient {
   private readonly baseUrl: string
   private readonly fetchImpl: typeof fetch
   private readonly timeoutMs: number
+  private readonly lookupImpl: LookupImpl | undefined
 
   constructor(private readonly options: SlackClientOptions = {}) {
     this.token = options.token ?? ''
-    this.baseUrl = (options.baseUrl ?? 'https://slack.com/api').replace(/\/+$/, '')
+    try {
+      this.baseUrl = normalizeBaseUrl(options.baseUrl, 'https://slack.com/api')
+    } catch (error) {
+      if (error instanceof EndpointSecurityError) throw new SlackError(error.message, 400)
+      throw error
+    }
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch
     this.timeoutMs = options.timeoutMs ?? 15000
+    this.lookupImpl = options.lookupImpl
   }
 
   hasToken(): boolean {
@@ -974,7 +985,14 @@ export class SlackClient {
         authorization: `Bearer ${this.token}`,
       }
       if (options.init?.body !== undefined && options.init?.body !== null) headers['content-type'] = 'application/json'
-      const response = await this.fetchImpl(url, {
+      const target = new URL(url)
+      try {
+        await assertSafeUrl(target, this.lookupImpl)
+      } catch (error) {
+        if (error instanceof EndpointSecurityError) throw new SlackError(error.message, 400)
+        throw error
+      }
+      const response = await this.fetchImpl(target.toString(), {
         ...options.init,
         headers: { ...headers, ...options.init?.headers },
         signal: controller.signal,
